@@ -40,6 +40,7 @@ void AVLTree::DelMin(TreePointer &q, TreePointer &r, bool &h) {
     }
     q->Entry = r->Entry;
     q->count = r->count;
+    r->LeftNode = q->LeftNode;
     q = r;
     r = r->RightNode;
     h = true;
