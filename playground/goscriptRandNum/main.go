@@ -20,11 +20,12 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fmt.Println(ex)
+	fmt.Printf(c.Body, ex)
 }
 
 type Config struct {
 	FuncString string `json:"func"`
+	Body       string `json:"body"`
 }
 
 func config() (c Config, err error) {
