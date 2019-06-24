@@ -1,0 +1,1 @@
+{"func":"import (\n\"time\"\n\"math/rand\"\n)\nfunc goscript() (string, error) {\nvar letters = []rune(\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ\")\nrand.Seed(time.Now().UnixNano())\nb := make([]rune, 20)\nfor i := range b {\nb[i] = letters[rand.Intn(len(letters))]\n}\nreturn string(b), nil\n}"}
