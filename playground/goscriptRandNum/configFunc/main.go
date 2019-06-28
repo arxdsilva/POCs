@@ -6,9 +6,9 @@ import (
 )
 
 func goscript() (string, error) {
-	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 	rand.Seed(time.Now().UnixNano())
-	b := make([]rune, 20)
+	b := make([]rune, 24)
 	for i := range b {
 		b[i] = letters[rand.Intn(len(letters))]
 	}
