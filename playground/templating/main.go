@@ -13,6 +13,14 @@ type Animal struct {
 	Data map[string]interface{}
 }
 
+func (a *Animal) Eat(food string) string {
+	return os.Getenv(food)
+}
+
+func (a *Animal) Seeds() string {
+	return "asidaisdadkapdadkao"
+}
+
 func main() {
 	a := Animal{Name: "Cacatua", Data: map[string]interface{}{"a": "b"}}
 	if err := run(a); err != nil {
@@ -30,7 +38,7 @@ func run(a Animal) (err error) {
 		return
 	}
 	b := new(bytes.Buffer)
-	err = t.Execute(b, a)
+	err = t.Execute(b, &a)
 	if err != nil {
 		return
 	}
