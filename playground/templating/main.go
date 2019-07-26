@@ -14,12 +14,13 @@ type Animal struct {
 }
 
 func main() {
-	if err := run(); err != nil {
+	a := Animal{Name: "Cacatua", Data: map[string]interface{}{"a": "b"}}
+	if err := run(a); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run() (err error) {
+func run(a Animal) (err error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return
@@ -29,7 +30,7 @@ func run() (err error) {
 		return
 	}
 	b := new(bytes.Buffer)
-	err = t.Execute(b, nil)
+	err = t.Execute(b, a)
 	if err != nil {
 		return
 	}
