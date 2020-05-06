@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/arxdsilva/pokemongorj/config"
+	"github.com/arxdsilva/pokemonGoRJ/config"
 	"github.com/dghubble/go-twitter/twitter"
 )
 

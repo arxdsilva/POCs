@@ -6,7 +6,7 @@ import (
 	"log"
 
 	"cloud.google.com/go/translate"
-	"github.com/arxdsilva/pokemongorj/config"
+	"github.com/arxdsilva/pokemonGoRJ/config"
 	"github.com/dghubble/go-twitter/twitter"
 	"golang.org/x/text/language"
 )

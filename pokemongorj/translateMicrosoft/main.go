@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/arxdsilva/pokemongorj/config"
+	"github.com/arxdsilva/pokemonGoRJ/config"
 	"github.com/dghubble/go-twitter/twitter"
 )
 
