@@ -16,6 +16,7 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v0.4.0 // indirect
 	github.com/go-redis/redis v6.15.2+incompatible
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
+	github.com/google/go-github/v43 v43.0.0 // indirect
 	github.com/google/pprof v0.0.0-20200708004538-1a94d8640e99 // indirect
 	github.com/iancoleman/strcase v0.0.0-20191112232945-16388991a334 // indirect
 	github.com/ianlancetaylor/demangle v0.0.0-20200705045648-b855e248e31b // indirect
@@ -32,10 +33,7 @@ require (
 	github.com/stretchr/testify v1.6.1 // indirect
 	github.com/yuin/goldmark v1.1.33 // indirect
 	go.opencensus.io v0.22.4 // indirect
-	golang.org/x/crypto v0.0.0-20200709230013-948cd5f35899 // indirect
 	golang.org/x/exp v0.0.0-20200224162631-6cc2880d07d6 // indirect
-	golang.org/x/net v0.0.0-20200707034311-ab3426394381 // indirect
-	golang.org/x/sys v0.0.0-20200625212154-ddb9806d33ae // indirect
 	golang.org/x/text v0.3.3
 	golang.org/x/tools v0.0.0-20200713011307-fd294ab11aed // indirect
 	google.golang.org/api v0.29.0
