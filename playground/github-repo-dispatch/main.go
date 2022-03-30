@@ -2,53 +2,73 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/google/go-github/v43/github"
 	"golang.org/x/oauth2"
 )
 
+var eventChan = make(chan string, 100)
+
 func main() {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go sendEvent(&wg)
+	go consumeEvent(&wg)
+	wg.Wait()
+}
+
+func dispatch() {
 	ctx := context.Background()
 	ts := oauth2.StaticTokenSource(
-		&oauth2.Token{AccessToken: os.Getenv("TOKEN")},
-	)
+		&oauth2.Token{AccessToken: os.Getenv("TOKEN")})
+
 	tc := oauth2.NewClient(ctx, ts)
+	tc.Timeout = time.Second * 10
 
 	client := github.NewClient(tc)
 
-	workflows, rep, err := client.Actions.ListWorkflows(ctx,
-		"arxdsilva", "golang-ifood-sdk", &github.ListOptions{})
-	fmt.Println("err: ", err)
-	fmt.Printf("rep: %+v\n", rep)
-	for i, workflow := range workflows.Workflows {
-		if i > 4 {
-			break
-		}
-		fmt.Println("")
+	msg := json.RawMessage(`{"example":"message"}`)
 
-		fmt.Println("ID: ", *workflow.ID)
-		fmt.Println("Name: ", workflow.GetName())
-		fmt.Println("GetPath: ", workflow.GetPath())
-		fmt.Println("Path: ", *workflow.Path)
-		fmt.Println("EventsURL: ", workflow.GetURL())
-		fmt.Println("GetState: ", workflow.GetState())
-		fmt.Println("HTMLURL: ", *workflow.HTMLURL)
-
-		fmt.Println("")
-	}
-
-	repo, resp, err := client.Repositories.Dispatch(
+	_, resp, err := client.Repositories.Dispatch(
 		context.Background(), "arxdsilva", "golang-ifood-sdk",
 		github.DispatchRequestOptions{
-			EventType: "PushEvent",
-		})
-	fmt.Println("err: ", err)
-	fmt.Printf("repo: %+v\n", repo)
-	fmt.Printf("resp: %+v\n", resp)
-	result, err := ioutil.ReadAll(resp.Body)
-	fmt.Println("err: ", err)
-	fmt.Printf("status: %+v\n", string(result))
+			EventType:     "trigger-test",
+			ClientPayload: &msg})
+	if err != nil {
+		fmt.Printf("err: %v, status: %v", err.Error(), resp.Status)
+	}
+}
+
+func sendEvent(wg *sync.WaitGroup) {
+	defer wg.Done()
+	var count = 1
+	for i := 0; i < count; i++ {
+		fmt.Println("sending msg")
+		eventChan <- "event"
+		time.Sleep(time.Second * 3)
+	}
+	time.Sleep(time.Second * 5)
+}
+
+func consumeEvent(wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case msg := <-eventChan:
+			fmt.Println("msg received: ", msg)
+			go func() {
+				time.Sleep(time.Minute)
+				dispatch()
+				fmt.Println("dispatched")
+			}()
+		default:
+			// fmt.Println("msg not received, waiting 2s")
+			time.Sleep(time.Second * 2)
+		}
+	}
 }
