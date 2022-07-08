@@ -32,12 +32,12 @@ func dispatch() {
 
 	client := github.NewClient(tc)
 
-	msg := json.RawMessage(`{"example":"message"}`)
+	msg := json.RawMessage(`{"mfe":"mms"}`)
 
 	_, resp, err := client.Repositories.Dispatch(
-		context.Background(), "arxdsilva", "golang-ifood-sdk",
+		context.Background(), "90poe", "oos-frontend-platforms",
 		github.DispatchRequestOptions{
-			EventType:     "trigger-test",
+			EventType:     "e2e-trigger-test",
 			ClientPayload: &msg})
 	if err != nil {
 		fmt.Printf("err: %v, status: %v", err.Error(), resp.Status)
@@ -62,7 +62,7 @@ func consumeEvent(wg *sync.WaitGroup) {
 		case msg := <-eventChan:
 			fmt.Println("msg received: ", msg)
 			go func() {
-				time.Sleep(time.Minute)
+				// time.Sleep(time.Minute)
 				dispatch()
 				fmt.Println("dispatched")
 			}()
