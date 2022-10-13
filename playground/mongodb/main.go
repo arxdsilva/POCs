@@ -73,6 +73,20 @@ func main() {
 		ID:         "1234442222",
 		AuthorID:   "1234",
 		ValidUntil: timeToPtr(time.Now().Add(time.Hour)),
+		Priority:   5,
+	}
+	set = bson.M{"$set": encrypted}
+	err = update(client, encrypted, set)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+
+	encrypted = Remark{
+		ID:         "12344422422",
+		AuthorID:   "11234",
+		ValidUntil: timeToPtr(time.Now().Add(time.Hour)),
+		Priority:   5,
 	}
 	set = bson.M{"$set": encrypted}
 	err = update(client, encrypted, set)
@@ -86,8 +100,9 @@ func main() {
 		"$or": []interface{}{
 			bson.M{"validUntil": nil},
 			bson.M{"validUntil": bson.M{"$gte": primitive.NewDateTimeFromTime(time.Now().Add(time.Hour * 100))}},
+			bson.M{"priority": nil},
+			bson.M{"priority": 5},
 		},
-		// "priority": 1,
 	}
 
 	cur, err := collection.Find(context.Background(), filter, options.Find().SetSort(sort))
