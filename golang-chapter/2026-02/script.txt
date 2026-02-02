@@ -1,0 +1,949 @@
+I'm Arthur Silva
+
+Today we'll talk about the Golang scheduler, 
+
+> --2-- < slide change
+
+Its reasons for existance, 
+how it works,
+all its inner components
+and what are its limitations.
+
+> --3-- < slide change
+
+1. What is it? --------------------------------
+
+So starting with the basics, what really is it?
+
+If we can put it in one sentence, 
+it is the orchestrator of all Go programs.
+
+So, in this small 
+example of a image processor,
+it means that:
+
+it tells the operating systems 
+that runs Go programs 
+how to run it and when.
+
+> --4-- < slide change
+
+In the main goroutine, 
+it creates some processing goroutine 
+
+> --5-- < slide change
+
+and then it waits on a channel.
+
+> --6-- < slide change
+
+Each processing goroutine 
+creates another goroutine, 
+does the complicated algorithm and
+then it writes to the file system.
+
+
+> now in this program 
+and every other go program,
+the scheduler is what 
+makes it possible 
+that they actually run, 
+and that they'll be ran 
+concurrently and independently.
+
+> it pauses and resumes them 
+when they block on a channel or mutex operations.
+
+> it's also responsible for 
+coordinating the Network i/o 
+and blocking system calls 
+like that file system call.
+
+it also runs runtime tasks 
+like garbage collection.
+
+and the craziest thing about it
+is that it can do it all 
+for hundreds of thousands of goroutines.
+
+>obviously, it depends 
+on your workload and hardware<
+
+> --7-- < slide change
+
+
+So you might be thinking, 
+why is it important to know it?
+
+Basically Its design and decisions 
+impact directly our code performance.
+
+So understanding its inner principles 
+is key to scaling code and workloads 
+in a effective way.
+
+
+> --8-- < slide change
+
+
+3. Why do we have a scheduler? --------------------------------
+
+Everyone here knows that 
+Golang uses goroutines
+to manage the workload 
+of a program and to do concurrency.
+
+Threads have many benefits, 
+such as their own signal mask,
+can be assigned to CPU affinity, 
+put to cgroups and queried
+for the resources that they use.
+
+All this are just a few of its
+features,
+
+And they are very good but 
+at the same time
+they are too many overheads
+that Go programs do not need.
+
+Another issue is that the OS 
+cannot make informed scheduling decisions. 
+
+For example, the Go garbage collector
+requires all threads to be stopped 
+and that the memory is at a consistent state.
+
+This involves waiting 
+for running threads 
+to reach a point where 
+we know that memory is consistent.
+
+When you involve many 
+random threads in this equation,
+it is highly possible that 
+you will need to wait 
+a very long time 
+before being able to stop it.
+
+> --9-- < slide change
+
+With the Go scheduler, 
+it can only schedule
+the garbage collection on points that it knows 
+that the memory is consistent. 
+
+This means that 
+when stopping for a garbage collection,
+we only wait for the threads that are being
+actively ran on a CPU core.
+
+> --10-- < slide change
+
+It is also important to note that goroutines
+are lighter on the memory 
+and faster to create, 
+destroy and switch context 
+than usual OS threads.
+
+> --11-- < slide change
+
+> multiplexing
+
+multiplexing is very important for the scheduler,
+as it enables go programs to run independently
+of the OS and also split work into different threads.
+
+Here I've put a sample image 
+of a research that I did 
+using a 64GB RAM, 24 core CPU machine.
+
+It is running roughly the same 
+Fibonacci algorithm in both Go and Rust, 
+the visualization is using the `htop` program.
+
+In the first image the Golang 
+program is running with only 2 scheduled threads*, 
+meanwhile the Rust program is using all 
+24 possible threads, this is just a visual bug
+as obviously all cores are being used,
+but go is doing its multiplexing
+behind the courtains.
+
+I can show in more details 
+later for any interested parties,
+but in short, the result is that, 
+
+the more we scale 
+the processing - even with this 
+
+10% usage cap on the Golang CPU - 
+the less it matters in performance
+when comparing Go and Rust -
+user-space vs OS threads.
+
+> --12-- < slide change
+
+Just to recaptule, 
+goroutines are user-space threads,
+
+lighter weight and cheaper than kernel threads
+
+and are multiplexed by the scheduler 
+so that we can fit as much as necessary
+into the existing kernel threads.
+
+
+> --13-- < slide change
+
+4. When does it schedule ? --------------------------------
+
+So, when does it schedule?
+
+Conceptually,
+It could be any time 
+that a program should or would affect 
+a goroutine execution.
+
+Could be any of, but not limited to:
+1. goroutine creation;
+2. goroutine blocking;
+3. blocking system call;
+4. network i/o;
+
+note that this is a active
+work from the goroutine.
+
+
+> --14-- < slide change
+
+In order to do all that we discussed
+it is vital that the scheduler
+has clear priorities. 
+
+The first is to use 
+as little as possible kernel threads,
+as we've seen that 
+they are expensive to create 
+and manage.
+
+Secondly, as Go is intended for 
+highly performant programs,
+so we want to support high concurrency. 
+    This means that Go programs 
+    should be able to run
+    lots of goroutines.
+
+Lastly, it is essential 
+that we can scale to any number of cores,
+    so that parallelism can be achieved
+    in any amount of goroutines.
+
+
+> --15-- < slide change
+
+But how does it work, right?
+
+So recapitulating, whenever operations 
+should or would affect 
+a goroutine execution occurence,
+
+the runtime causes a 
+switch to create a new 
+goroutine in a thread.
+
+As seen in this image 
+    - used from that image processor -
+
+in the main thread,
+g_main is executed and keeps running.
+
+In the case of a channel receive
+however we want the goroutine to block.
+
+So the context is switched out
+for g1.
+
+So now that we got through why, when and what,
+lets start building with that example.
+
+
+> --16-- < slide change
+
+The next step would be on 
+How do we multiplex goroutines
+onto kernel threads.
+
+well, multiplexing is a really hard task 
+and the best way to answer 
+it is to break it 
+into two different problems:
+
+First, when to create threads?
+
+Secondly, how do we distribute 
+goroutines across threads?
+
+In order to start answering
+these questions, 
+I must present you 
+one important structure first.
+
+> --17-- < slide change
+
+The runqueue 
+is a heap allocated 
+First-In-First-Out queue
+that stores the goroutines 
+informations for our processors.
+
+it works the same as any 
+FIFO queue you can imagine.
+
+When there is a create event, 
+a new goroutine is added 
+to the end of the queue.
+
+And when it is time 
+to run a goroutine, 
+you run it through the head 
+of the queue.
+
+> --18-- < slide change
+
+So, assuming a machine with 2 cores, 
+lets go back to that image processing code.
+How would we multiplex it?
+
+Well, a good start 
+would be with how we 
+DONT want to multiplex, 
+lets start with:
+
+> --19-- < slide change
+
+1. All goroutines going
+    to a single thread.
+
+> It does not allow any concurrency
+    This means that if the goroutine blocks, 
+    the thread blocks and no other goroutine runs.
+
+> Also it is impossible to do parallelism
+    even if more cores are available, only 1 CPU is used.
+
+Another bad idea would be to:
+
+> --20-- < slide change
+
+2. create and destroy threads per goroutine
+
+This would make impossible 
+to scale with goroutines,
+
+as they are suposed to be lightweight,
+this would be too much of a overhead.
+
+Remember, threads are expensive 
+to create and destroy.
+
+> --21-- < slide change
+
+So to start building our scheduler,
+we want to:
+
+1. Create threads as you go, 
+    for example 
+    when all other threads are busy 
+    and you still have some 
+    goroutines ready to run
+
+2. Also keep them around for reuse:
+    In order to avoid the creation overhead,
+    the scheduler will offently "park" threads.
+
+    This puts threads to sleep, 
+    helping clear up the CPU
+
+    It also trakcs all 
+    idle threads using a list,
+    So that we can wake them back later.
+
+3. Now about the goroutine distribution:
+    the threads take the goroutines
+    from a runqueue.
+
+Now lets visualize it and try these concepts.
+
+> --22-- < slide change
+
+Lets say that we have the 
+T main thread running g_main,
+
+This is how every go program stars out.
+
+> --23-- < slide change
+
+Now g_main creates g1
+
+> --24-- < slide change
+
+So the scheduler 
+puts g1 on the runqueue
+
+Then it does its checks:
+1. there's work to do;
+2. our threads are busy;
+
+we have to start a new thread
+
+> --25-- < slide change
+
+then t1 is started by the scheduler
+
+When it comes along, 
+there is work to do,
+
+> --26-- < slide change
+
+so it pops g1 from the runqueue
+and runs it, so lets say
+that g1 EXITS
+
+> --27-- < slide change
+
+rather then destroying T1,
+the scheduler uses the reusage principle
+
+> --28-- < slide change
+
+so we "park" it 
+in the idle threads list
+
+> --29-- < slide change
+
+Now when g_main creates g2
+we do essentially the same
+
+> --30-- < slide change
+
+add it to the runqueue
+
+the scheduler starts again its checks
+and there is a idle thread,
+so there is no need to start any new ones
+
+> --31-- < slide change
+
+Now we have T1 running g2
+
+At this point, we solved
+how to reduce thread creation,
+concurrency and parallelism.
+
+probably you've noticed a small issue
+
+> --32-- < slide change
+
+we do have multiple threads
+accessing the same runqueue,
+this means that 
+we would probably need a lock
+
+And locks are bad for scalability
+as they serialize goroutine scheduling
+
+this way, we can schedule
+only one goroutine at a time
+
+There is also a bigger problem,
+what goes on when we have g_main
+creating ten thousand of long-running
+goroutines in succession ?
+
+> --33-- < slide change
+
+Simply a crazy amount 
+of threads can be created.
+
+Now, imagine all those threads
+sharing this same data structure 
+WITH a lock.
+
+This is the recipe for chaos
+and impossible scalability.
+
+> --34-- < slide change
+
+So how can we make scalability work?
+
+we still want to keep 
+thread reusability
+on the table.
+
+Our main issue now is that a limitless
+number of threads are accessing the runqueue
+
+> --35-- < slide change
+
+So the next reasonable step
+is to limit the thread's access
+to the runqueue
+
+It is very similar to what we talked,
+but we'll add a new check to the scheduler.
+
+before every thread creation,
+we check if the number of 
+goroutines-running threads 
+is already equal or greater 
+than the limit that we've set.
+
+if it is, we will not 
+be starting another thread
+
+This limit applies to threads
+accessing runqueue only.
+
+As we're trying to solve 
+the contention problem.
+
+It does not apply to threads
+blocked in system calls.
+
+As we've already defined,
+We'll keep threads around
+for reuse and use the runqueue
+to feed them work.
+
+> --36-- < slide change
+
+It is also critical
+that we define 
+what the limit should be, 
+right?
+
+It matters a lot,
+since if we set it too high,
+    we have too many threads waiting
+    and so too much contention.
+
+If it is too low,
+    we will starve the CPU cores
+    and not be using them for all 
+    their capabilities, by giving
+    up on parallelism.
+
+We dont want that either,
+So how do we set it?
+
+We set it 
+to the number of CPU cores,
+in that way 
+we get all the possible
+parallelism needed.
+
+> --37-- < slide change
+
+We now have a limit,
+that is the number of cores,
+lets just say two, alright.
+
+Lets say that T_main creates g2,
+but g_main and g1 are still 
+running.
+
+> --38-- < slide change
+
+We add g2 to the runqueue,
+the scheduler will do the checks,
+but this time will also verify the 
+upper threads limit. 
+
+We have two goroutine running on threads,
+so we're not creating another thread.
+
+Then, what happens to g2?
+
+> --39-- < slide change
+
+at a future scheduling point,
+like when g_main 
+gets blocked on a channel,
+it will be scheduled.
+
+> --40-- < slide change
+
+So now we got the starving and limitless
+thread contention fixed.
+We also didnt give up on having parallelism.
+
+But is it ok to go on?
+What happens when we have more cores?
+
+The limit increases
+and we'll have more 
+threads running goroutines
+and accessing the runqueue
+
+Now we got more
+contention, but this time
+on the runqueue.
+But how bad is it really?
+
+> --41-- < slide change
+
+In order to test it,
+an experiment was made, 
+creating a custom scheduler, 
+with a single runqueue
+
+everything else 
+on the runtime was not modified
+
+the test created goroutines
+according to the number of cores
+in parallel.
+
+It was used two machines,
+one quad core and the other
+a sixteen core machine.
+
+> --42-- < slide change
+
+As you can see,
+the result speaks for itself.
+
+the modified scheduler takes
+four times longer on the 4-core machine
+and 31 times longer on the 16 core one.
+
+It proves that performance wont get
+worse in a linear way as we scale
+the number of cores.
+
+We cannot use that scheduler version,
+we have to also scale the runqueue.
+
+> --43-- < slide change
+
+In order to do that 
+the scheduler uses N runqueues
+on a N-core machine.
+
+Every thread CLAIMS a runqueue 
+    in order to
+    run goroutines that
+    are associated with it.
+
+Also threads can create and run 
+    ONLY goroutines from its
+    runqueue.
+
+as we did before,
+we want to keep reusing threads.
+
+> --44-- < slide change
+
+Now we have two runqueues,
+runQ A and runQ B.
+
+we add g1 to runqueue A
+as it is where it was created
+
+as before we start 
+the scheduler checks.
+
+1. there is work to be done,
+2. all threads are busy and
+3. the number of threads running 
+    are lower than the limit
+
+So we start a new thread.
+T1 is started and claims runqueue B.
+
+But as T1 is bounded to runqueue B,
+    it can only run goroutines 
+    from runqueue B.
+
+The goroutine that 
+    originated T1
+    is in another runqueue.
+
+So, how do we fix it?
+
+> --45-- < slide change
+
+the scheduler is cleaver enough
+that If a thread needs work
+and their runqueue is empty
+it will just steal it 
+from another runqueue.
+
+This process happens at random,
+so that the thread doesnt choose
+where to get the work from.
+
+Although it helps the contention
+of that runqueue, as it will
+"steal" half of its scheduled
+goroutines to run.
+
+This mechanism
+organically balances work
+between threads.
+
+> --46-- < slide change
+
+So back to our problem,
+T1 will just steal g1 to its
+runqueue
+
+> --47-- < slide change
+
+Then it can run it, easy right?
+
+> --48-- < slide change
+
+Looking back again,
+we have now a scheduler that
+1. scales well with any number of CPU cores;
+2. threads dont have to wait for work;
+3. threads dont block 
+    each others work by balancing.
+
+> --49-- < slide change
+
+Now we can go back
+and run the important code
+from the image processor
+
+> --50-- < slide change
+
+when T1 creates g3,
+it is added to T1's runqueue.
+
+And now we're NOT going 
+to start a new thread, 
+as the number of runqueue threads 
+is not less then the limit set.
+
+> --51-- < slide change
+
+Lets say that g1 
+for any reason,
+does a blocking system call.
+
+What happens with that syscall
+is that g1 is going to block,
+but T1 also gets blocked.
+
+We now have a local runqueue,
+that has work, 
+but the thread is also blocked.
+
+> --52-- < slide change
+
+All we really need 
+is a form to transfer 
+the blocked thread's runqueue
+to another thread.
+
+So there is this background thread 
+monitor that detects
+blocked threads,
+takes and gives runqueues away.
+
+If a thread is going to block,
+why couldnt it give back the runqueue
+to the scheduler?
+
+Well it doesnt know 
+how long it will take
+to block.
+
+We dont want it 
+to give away the runqueue too soon
+if the syscall is not
+going to take that long.
+
+So monitoring
+blocked threads is our best option.
+
+> --53-- < slide change
+
+So where does the runqueue go to?
+
+First, it tries to give it to 
+a parked thread.
+
+If there is none,
+the scheduler will start a thread.
+
+It does not affect our limit,
+as it applies only to goroutine-running
+ threads.
+
+Since the original thread is blocked,
+there is place for another to take
+the runqueue.
+
+With this "handoff" mechanism,
+we can prevent possible
+goroutine starvation.
+
+> --54-- < slide change
+
+So going back to rescue g3,
+here we have the blocked T1.
+
+The monitor gets to runqueue B,
+starts its checks:
+1. the queue has work;
+2. there are no parked threads;
+3. Since it's been blocked for a while now,
+    it can start a new thread.
+
+> --55-- < slide change
+
+It starts T2 and immidiatly gives
+runqueue B to T2.
+
+And now T2 can run g3.
+
+> --56-- < slide change
+
+So, to summarize,
+we now have a scheduler that:
+1. scales with any number of cores;
+2. threads dont contend for work;
+3. work is balanced;
+4. and prevents blocked threads starvation.
+
+This is how the go scheduler 
+essentially works.
+
+> --57-- < slide change
+
+The go scheduler is 
+all about these concepts:
+
+1. reusing threads;
+2. limit the running threads to CPU cores 
+    - ever heard of GOMAXPROCS? ;
+3. uses the distributed runqueues.
+
+The thing is, 
+there is still
+one tricky situation
+that we have to fix.
+
+> --58-- < slide change
+
+This all works as long as
+the program calls the scheduler actively.
+
+What happens when we have a goroutine
+that does not cooperate,
+and does not do any blocking?
+
+Lets talk about this
+complicatedAlgo function.
+
+If it is long running, CPU bound
+and never yields the CPU,
+what happens?
+
+If the scheduler isnt ever
+called, then nothing else
+will get scheduled.
+
+It will lead to 
+the runqueue starvation.
+
+> --59-- < slide change
+
+In order to fix that, 
+the scheduler implements
+asynchronous preemption.
+
+that preemption can be 
+a topic for another day,
+but essentially:
+
+it runs a background thread
+called "sysmon" to detect
+long-running goroutines.
+
+Then it will unschedule them
+when possible.
+
+Once unscheduled,
+It would be unwise 
+to just put it back 
+on any other runqueue.
+
+So these special goroutines
+go to a global runqueue.
+
+> YES, strange right?
+
+This exists in addition 
+to the distributed runqueues.
+
+To avoid contention,
+this is a lower priority queue,
+so threads will access it
+a lot less offently.
+
+With that we have the main 
+ideas and tricky situations
+that the scheduler implements.
+
+> --60-- < slide change
+
+Now the scheduler manages to:
+1. successfully use a limited amount of threads;
+2. support high concurrency;
+3. support parallelism to N cores;
+
+obviously not everything is
+sunshines and rainbows, right?
+
+> --61-- < slide change
+
+These decisions also leads us
+to a number os limitations.
+
+1. It has No clear priorities:
+    as it uses a First-In-First-out queue
+2. Also It has No strong preemption:
+    there is no fairness or latency
+    guarantees.
+
+    So it is entirely possible 
+    that a goroutine in some cases
+    to bring the entire system
+    to slow down to a halt.
+3. scheduler doesnt know the system hardware:
+    no real localization 
+    between the data and 
+    the goroutine computation
+
+    for example, in the new intel CPUs
+    that has efficiency and 
+    performance cores, it will not
+    differentiate them when scheduling
+
+> --62-- < slide change
+
+I've placed here some links
+so anyone can dig further
+about the scheduler and preemption
+
+> --63-- < slide change
+
+Thanks, I hope that you've
+got some more appreciation 
+for the go scheduler!
+

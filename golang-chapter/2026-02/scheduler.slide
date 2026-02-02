@@ -1,0 +1,574 @@
+Golang Scheduler
+LodgeLink
+15:00 07 Feb 2026
+
+Arthur Silva
+Staff Software Engineer
+asilva@lodgelink.com
+@arxdsilva
+
+* talking points
+
+- What, Why and When?
+- What are its goals?
+- How does scheduling work?
+- Scheduling with 1 core
+- Thread reusing
+- Run queues
+- Concurrency
+- Thread limiting
+- Work stealing
+- Work handoff
+- Preemption
+- Limitations
+
+* 1. What is it?
+
+> behind the scenes *orchestrator* of Go programs
+
+    func main() {
+        // crete goroutines
+        for _, i := range imgs {
+            go process(i)
+        }
+        ...
+        // wait
+        <-ch
+    }
+    func process(img) {
+        // create another goroutine
+        go createMetrics()
+
+        complicatedAlgo(img)
+
+        // write to file
+        f, err := os.OpenFile()
+        ...
+    }
+
+
+* 1. What is it?
+
+> behind the scenes *orchestrator* of Go programs
+
+    func main() {
+        // crete goroutines
+        for _, i := range imgs {
+            go process(i)               -> *Runs* created goroutines 
+        }
+        ...
+        // wait
+        <-ch
+    }
+    func process(img) {
+        // create another goroutine
+        go createMetrics()
+
+        complicatedAlgo(img)
+
+        // write to file
+        f, err := os.OpenFile()
+        ...
+    }
+
+
+* 1. What is it?
+
+> behind the scenes *orchestrator* of Go programs
+
+    func main() {
+        // crete goroutines
+        for _, i := range imgs {
+            go process(i)               -> *Runs* created goroutines 
+        }
+        ...
+        // wait
+        <-ch                            -> pauses and resumes them:
+    }                                       blocking and mutex operations.
+        func process(img) {
+        // create another goroutine
+        go createMetrics()
+
+        complicatedAlgo(img)
+
+        // write to file
+        f, err := os.OpenFile()
+        ...
+    }
+
+* 1. What is it?
+
+> behind the scenes *orchestrator* of Go programs
+
+    func main() {
+        // crete goroutines
+        for _, i := range imgs {
+            go process(i)               -> *Runs* created goroutines 
+        }
+        ...
+        // wait
+        <-ch                            -> pauses and resumes them:
+    }                                       blocking and mutex operations.
+    func process(img) {
+        // create another goroutine
+        go createMetrics()
+
+        complicatedAlgo(img)
+
+        // write to file                coordinates:
+        f, err := os.OpenFile()         -> blocking syscalls, network I/O
+        ...                                 runtime tasks garbage collection.
+    }
+
+* 2. Why is it important to understand?
+
+> design & decisions
+
+* 3. Why do we have a scheduler?
+
+- goroutines are user-space threads;
+
+    similar to kernel threads (managed by the OS), 
+    but managed by the Go runtime.
+
+* 3. Why do we have a scheduler?
+
+- goroutines are user-space threads;
+
+    similar to kernel threads (managed by the OS), 
+    but managed by the Go runtime.
+
+- lighter-weight and cheaper than kernel threads;
+
+    *smaller memory footprint*:
+    initial stack = 2KB; default thread stack = 8 KB.
+    state tracking overhead.
+
+* 3. Why do we have a scheduler?
+
+- goroutines are user-space threads;
+
+    similar to kernel threads (managed by the OS), 
+    but managed by the Go runtime.
+
+- lighter-weight and cheaper than kernel threads;
+
+    *smaller memory footprint*:
+    initial stack = 2KB; default thread stack = 8 KB.
+    state tracking overhead.
+
+- also:
+
+    *faster to create, destroy, switch context*:
+    goroutine switches = ~tens of nano second;
+    thread switches = ~a micro second.
+
+* 3. Why do we have a scheduler?
+
+- goroutines are user-space threads;
+- lighter-weight and cheaper than kernel threads;
+- *multiplexed* onto kernel threads.
+
+.image ./imgs/threads_go.png _ 400
+.image ./imgs/threads_rust.png _ 400
+
+* 3. Why do we have a scheduler?
+
+- goroutines are user-space threads;
+- lighter-weight and cheaper than kernel threads;
+- *multiplexed* onto kernel threads.
+
+.image ./imgs/cpu_core.png _ 400
+.image ./imgs/cpu_core_go.png _ 400
+
+* 4. When does it schedule ?
+
+    func main() {
+        // crete goroutines
+        for _, i := range imgs {
+            go process(i)               -> goroutine creation
+        }                                   run new goroutines, run from this
+        ...
+        // wait
+        <-ch                            -> goroutine blocking
+    }                                       pause ASAP
+    func process(img) {
+        // create another goroutine
+        go createMetrics()
+
+        complicatedAlgo(img)
+
+        // write to file                
+        f, err := os.OpenFile()         -> blocking syscalls, network I/O
+        ...                                 blocks the thread too!
+    }
+
+* 5. What are the scheduler goals ?
+
+1. use small number of kernel threads;
+2. support high concurrency;
+3. leverage parallelism, scale over N cores;
+
+* 6. How does it work?
+
+Schedules at operations that *should* or *would* affect *goroutine* *execution*.
+
+The runtime causes a switch into the scheduler under-the-hood, and the scheduler may schedule *different* *goroutine* on *this* *thread*.
+
+.image ./imgs/execution.png _ 400
+
+* 7. How to multiplex goroutines onto kernel threads?
+
+Break into:
+1. When to create threads?
+2. How to distribute across threads?
+
+* 7. How to multiplex goroutines onto kernel threads?
+
+Tracking run goroutines: runqueues
+
+    joins goroutines that are ready-to-run and need to be scheduled,
+    are allocated in FIFO runqueues.
+
+.image ./imgs/execution_2.png _ 100
+.image ./imgs/execution_3.png _ 200
+
+* 7. How to multiplex goroutines onto kernel threads?
+
+- assuming 2 cores:
+
+    func main() { //g_main
+        // crete goroutines
+        for _, i := range imgs {
+            go process(i)               -> creates g1, g2
+        }
+        ...
+        // wait
+        <-ch                            -> block goroutine
+    }
+    func process(img) {} //g1
+
+* 7. How to NOT multiplex goroutines onto kernel threads?
+
+1. All goroutines on a single thread
+> Doesnt allow any concurrency;
+> impossible to do parallelism;
+
+.image ./imgs/execution_4.png
+
+* 7. How to NOT multiplex goroutines onto kernel threads?
+
+2. create and destroy threads per goroutine
+
+> breaks the lightweight purpose of using goroutines
+
+* 7. How to REALLY multiplex goroutines onto kernel threads?
+
+I. create threads when you need them;
+II. keep threads for reuse;
+III. threads get goroutines from the runqueue;
+
+* 8. bringing all together
+
+.image ./imgs/t_main_0.png
+
+
+* 8. bringing all together
+
+.image ./imgs/t_main_1.png
+
+* 8. bringing all together
+
+.image ./imgs/t_main_2.png
+
+* 8. bringing all together
+
+.image ./imgs/t_main_3.png
+
+* 8. bringing all together
+
+.image ./imgs/t_main_4.png
+
+* 8. bringing all together
+
+.image ./imgs/t_main_5.png
+
+* 8. bringing all together
+
+.image ./imgs/t_main_6.png
+
+*park* T1 instead of destroying it
+
+* 8. bringing all together
+
+.image ./imgs/t_main_7.png
+
+* 8. bringing all together
+
+.image ./imgs/t_main_8.png
+
+- add g2 to runqueue
+- idle thread, reuse it!
+
+* 8. bringing all together
+
+.image ./imgs/t_main_9.png
+
+- reduced thread usage;
+- provided parallelism and concurrency;
+
+* 8. bringing all together
+
+- reduced thread usage;
+- provided parallelism and concurrency;
+
+- lock?
+
+.image ./imgs/t_main_scale_0.png
+
+
+* 8. bringing all together
+
+- reduced thread usage;
+- provided parallelism and concurrency;
+
+- lock?
+- unlimited threads can be created;
+
+.image ./imgs/t_main_scale_0.png
+
+* 8. How to bring scale?
+
+- we want to reuse threads
+
+    threads are expensive;
+    reusing reduces that cost;
+
+- Problem: N threads using the runqueue
+
+* 8. How to bring scale?
+
+- we want to reuse threads;
+- limit threads runqueue access;
+- limit threads that are *running* *goroutine* *only*;
+- threads in syscal etc, wont count towards this limit;
+
+* 8. How to bring scale?
+
+- What is a good limit?
+- too high = too many threads waiting
+- too low = starved CPUs
+
+    limit = number of CPU cores!
+
+* 8. How to bring scale?
+
+- Limiting # of threads accessing runqueue to the # of CPU cores (N) = 2;
+
+.image ./imgs/t_main_scale_1.png
+
+
+* 8. How to bring scale?
+
+- Limiting # of threads accessing runqueue to the # of CPU cores (N) = 2;
+
+.image ./imgs/t_main_scale_2.png
+
+
+* 8. How to bring scale?
+
+- Limiting # of threads accessing runqueue to the # of CPU cores (N) = 2;
+
+.image ./imgs/t_main_scale_3.png
+
+g2 will be run eventually.
+
+* 8. How to bring scale?
+
+- did we fix it?
+- what happens on 64-128 cores?
+- more contention, on runqueue
+
+* 9. experimenting
+
+- modified go scheduler
+
+    global runqueue
+    number of goroutine running threads = number of CPU cores
+
+- everything else on runtime not modified
+
+> test
+
+    creates #Cores goroutines in parallel
+    until the N total of goroutines are created
+
+> machines
+
+1. 4 core CPU
+2. 16 core CPU
+
+* 9. experimenting
+
+1. 4-core: modified scheduler takes *4x* *longer*
+2. 16-core:modified scheduler takes *31x* *longer*
+
+.image ./imgs/t_main_scale_4.png _ 400
+
+* 10. scaling the runqueue
+
+- use N runqueues on N-core machine;
+- a thread *claims* a runqueue to run goroutines;
+- reuse threads.
+
+* 10. scaling the runqueue
+
+.image ./imgs/t_main_scale_5.png
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+* 10. scaling the runqueue
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+.image ./imgs/t_main_scale_5.png
+
+- empty runqueue, get work from waiting runqueues;
+- "steals" half of the other runqueue work;
+- picked at random;
+
+* 10. scaling the runqueue
+
+.image ./imgs/t_main_steal_0.png
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+* 10. scaling the runqueue
+
+.image ./imgs/t_main_steal_1.png
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+* 10. scaling the runqueue
+
+- scalability with # of cores;
+- threads dont wait for work;
+- work is *balanced* with "work-stealing";
+
+* 11. work stealing
+
+    func process(img) {
+        // create goroutine
+        go createMetrics()
+
+        complicatedAlgo(img)
+
+        // write to file
+        f, err := os.OpenFile()         -> goroutine & thread block
+        ...
+    }
+
+* 11. work stealing
+
+.image ./imgs/t_main_steal_2.png
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+
+* 11. work stealing
+
+.image ./imgs/t_main_steal_3.png
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+* 11. handoff
+
+- mechanism for runqueue transfering;
+- acts on monitored blocked threads.
+
+why cant the thread hand the runqueue?
+
+    could give up the runqueue unnecessarily
+
+
+* 11. handoff
+
+- mechanism for runqueue transfering;
+- unpark a thread or start if needed;
+
+does not affect the limit:
+- limit applies to *goroutine-running* threads only;
+- original thread is blocked, another can take its place.
+
+Effect:
+- prevents goroutine starvation!
+
+* 11. handoff
+
+.image ./imgs/t_main_handoff_0.png
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+* 11. handoff
+
+.image ./imgs/t_main_handoff_1.png _ 700
+
+Number of CPU cores (N) = number of runqueues = 2.
+
+* 11. The scheduler
+
+- scalability with # of cores;
+- threads dont wait for work;
+- work is *balanced* with "work-stealing";
+- *handoff* prevents starvation from blocked threads;
+
+* 11. The scheduler
+
+- reuse threads;
+- limits #(goroutine-running) threads to CPU cores (=GOMAXPROCS);
+- uses distributed runqueues;
+
+* 11. The scheduler
+
+Scheduling points are *cooperative*, the program calls into the scheduler.
+
+    // CPU bound, long running
+    func complicatedAlgo(img) {
+        // doenst create goroutines
+        // doesnt block
+        ...
+    }
+
+> This can starve the runqueue
+
+* 12. Preemption
+
+- scheduler implements asynchronous preemption;
+
+> background thread "sysmon" - monitor;
+> detects and unschedules long-running goroutines.
+(> 10ms)
+
+- go to global runqueue;
+- lower priority source;
+
+* 12. scheduler Goals
+
+- uses small number of kernel threads;
+- supports high concurrency;
+- leverage parallelism to N cores;
+
+* 12. limitations
+
+- no goroutine priority: due to FIFO runqueues;
+- no strong preemption: no strong fairness / latency guarantees;
+- no localization.
+
+* 13. sources
+
+.link https://medium.com/a-journey-with-go/go-asynchronous-preemption-b5194227371c async-preemption
+.link https://go.googlesource.com/proposal/+/master/design/24543-non-cooperative-preemption.md non-coop-preemption
+.link https://morsmachine.dk/go-scheduler go scheduler
+.link https://www.youtube.com/watch?v=YHRO5WQGh0k the scheduler saga
+.link https://go.dev/src/runtime/preempt.go preemption source code
+

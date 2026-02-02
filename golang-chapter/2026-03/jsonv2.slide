@@ -1,0 +1,235 @@
+Golang Scheduler
+LodgeLink
+15:00 07 Mar 2026
+
+Arthur Silva
+Staff Software Engineer
+asilva@lodgelink.com
+@arxdsilva
+
+* Table of Contents
+
+- Background
+- Missing functionalities
+- API deficiencies
+- Current limitations
+- Current flaws
+- Proposal
+    - Goals, Overview, Errors, Options
+- Experimental
+- Benchmarks
+- Observations
+- Sources
+
+* 1. Background
+
+- encoding/json package widely used for over a decade;
+- highly flexible with its ability to marshal and unmarshal native Go types;
+- Flaws and shortcomings have been identified over time
+
+* 2. Missing functionalities
+
+- Specify custom formatting of time.Time;
+- Omit specific Go values when marshaling;
+- Marshal nil Go slices and maps as empty JSON arrays and objects;
+- Inline Go types without using Go embedding.
+
+* 3. API deficiencies
+
+- No easy way to correctly unmarshal from an io.Reader. 
+
+    Users often write json.NewDecoder(r).Decode(v), which is 
+    incorrect since it does not reject trailing junk at the end of the payload.
+
+- Options can be set on the Encoder and Decoder types, but cannot be used with the Marshal and Unmarshal functions. 
+
+    Similarly, types implementing the Marshaler and Unmarshaler interfaces cannot 
+    make use of the options. 
+    There is no way to plumb options down the call stack.
+
+- The functions `Compact`, `Indent`, and `HTMLEscape` write to a `bytes.Buffer` instead of something more flexible like a `[]byte` or `io.Writer`. 
+
+    This limits the usability of those functions.
+
+: API can be sharp or restrictive
+
+* 4. Current limitations
+
+- Performance now is very limited;
+
+- MarshalJSON: The MarshalJSON interface method forces the implementation to allocate the returned []byte. 
+
+: Also, the semantics require that the "json" package parse the result both to verify that it is valid JSON and 
+: also to reformat it to match the specified indentation.
+
+- UnmarshalJSON: The UnmarshalJSON interface method requires that a complete JSON value be provided (without any trailing data). 
+
+: This forces the "json" package to parse the JSON value to be unmarshaled 
+: in its entirety to determine when it ends before it can call UnmarshalJSON. 
+: Afterwards, the UnmarshalJSON method itself must parse the provided JSON 
+: value again. 
+: If the UnmarshalJSON implementation recursively calls Unmarshal, 
+: this leads to quadratic behavior. As an example, this is the source of 
+: dramatic performance degradation when unmarshaling into spec.Swagger (kubernetes/kube-openapi#315).
+
+- Encoder.WriteToken: There is no streaming encoder API. 
+
+: A proposal has been accepted but not implemented (#40127). 
+: The proposed API symmetrically matches Decoder.Token, but suffers from 
+: the same performance problems (see next point).
+
+- Decoder.Token: The Token type is an interface, which can hold one of multiple types.
+
+    This unfortunately allocates frequently when boxing within the Token interface type
+
+* 5. Current Flaws
+
+1. Improper handling of JSON syntax: 
+    - Allows invalid UTF-8, while the latest internet standard (RFC 8259) requires valid UTF-8;
+    - Allows for duplicate object member names;
+
+2. Case-insensitive unmarshaling:
+    - JSON object names are paired with Go struct field names using a case-insensitive match;
+
+3. Inconsistent calling of type-defined methods:
+    - Due to reflection;
+    - Cant use `MarshalJSON` and `UnmarshalJSON` if the underlying value is not addressable;
+
+4. Inconsistent merge semantics:
+    - unmarshaling into a non-empty Go value is inconsistent;
+    - either clears the target, resets reusing the memory;
+    - and/or merges into target;
+
+* 5. Current Flaws
+
+5. Inconsistent error values:
+    - Syntatic errors: not JSON grammar input;
+    - Semantic error: input is valid, but there is a type-mismatch between the JSON and Go values;
+    - I/O error: not possible to write/read;
+
+Returns structured or unstructured errors.
+
+* 6.1 Proposal - Goals
+
+1. Mostly backwards compatible;
+2. More Correct;
+
+- should abide more to the existing standards;
+
+3. Better performance;
+4. More flexible;
+
+- allow most usages;
+
+5. Easy to use;
+
+- hard to misuse;
+
+6. Avoid unsafe;
+
+- untrusted JSON cannot corrupt memory;
+
+* 6.2 Proposal - Overview
+JSON serialization can be broken down into two primary components:
+
+- syntactic functionality is the processing based on its grammar;
+- semantic functionality determines the meaning of JSON values as Go values and vice-versa.
+
+: Purple blocks represent types;
+: blue blocks are functions or methods;
+: direction of the arrows represent the approximate flow of data;
+:
+: bottom diagram contains functionality that is only concerned with syntax;
+: top is functionality that assigns semantic meaning to syntactic data.
+
+.image https://raw.githubusercontent.com/go-json-experiment/json/6e475c84a2bf3c304682aef375e000771a318a5c/api.png _ 600
+
+* 6.2 Proposal - jsontext
+
+Provides functionality to process JSON purely according to the grammar;
+
+    package jsontext // "encoding/json/jsontext"
+
+    type Encoder struct { /* no exported fields */ }
+    func NewEncoder(io.Writer, ...Options) *Encoder
+    func (*Encoder) WriteToken(Token) error
+    func (*Encoder) WriteValue(Value) error
+
+    type Decoder struct { /* no exported fields */ }
+    func NewDecoder(io.Reader, ...Options) *Decoder
+    func (*Decoder) PeekKind() Kind
+    func (*Decoder) ReadToken() (Token, error)
+    func (*Decoder) ReadValue() (Value, error)
+    func (*Decoder) SkipValue() error
+
+    type Kind byte
+    type Token struct { /* no exported fields */ }
+    func (Token) Kind() Kind
+    type Value []byte
+    func (Value) Kind() Kind
+
+* 6.3 Proposal - Errors
+
+Errors due to non-compliance with the JSON grammar are reported as `SyntacticError`.
+
+    type SyntacticError struct {
+        // ByteOffset indicates that an error occurred after this byte offset.
+        ByteOffset int64
+        // JSONPointer indicates that an error occurred within this JSON value
+        // as indicated using the JSON Pointer notation (see RFC 6901).
+        JSONPointer string
+        // Err is the underlying error.
+        Err error // always non-nil
+    }
+    func (e *SyntacticError) Error() string
+    func (e *SyntacticError) Unwrap() error
+
+I/O Errors returned as opaque error and unwrap to the original error returned func call.
+
+* 6.4 Proposal - Options
+
+- 3 "out-of-the-box" identical types - allowing v1, v2 and encode/decode changes;
+
+    jsonv1.Marshal(v)
+
+uses default v1 semantics
+
+    jsonv2.Marshal(in, jsonv1.DefaultOptionsV1)
+
+semantically equivalent to jsonv1.Marshal
+
+    jsonv2.Marshal(in, jsonv1.DefaultOptionsV1, jsontext.AllowDuplicateNames(false))
+
+uses mostly v1 semantics, but opts into one v2-specific behavior
+
+.link https://github.com/golang/go/discussions/63397#discussioncomment-7201218
+
+
+* 7. Experimental
+
+- is stable and has been used in production by Tailscale;
+- expect to be break;
+- if using, vendor it;
+
+.link https://pkg.go.dev/github.com/go-json-experiment/json
+
+* 8. Benchmarks
+
+.image https://raw.githubusercontent.com/go-json-experiment/jsonbench/master/images/benchmark-marshal-interface.png
+
+* 9. Observations
+
+- non-deterministic ordering is winning the vote in map ordering;
+- omitzero: omits the field if it is the Go zero value or possesses an IsZero() bool method that reports true;
+- `bytedance/sonic` "performance" pkg;
+
+.link https://github.com/golang/go/discussions/63397#discussioncomment-7201224
+
+* 10. Sources
+
+.link https://github.com/golang/go/discussions/63397
+.link https://github.com/go-json-experiment/jsonbench
+.link https://github.com/bytedance/sonic
+.link https://pkg.go.dev/github.com/go-json-experiment/json
+.link https://github.com/golang/go/discussions/63397#discussioncomment-7201224
+.link https://github.com/golang/go/discussions/63397#discussioncomment-7201218
