@@ -543,14 +543,15 @@ Scheduling points are *cooperative*, the program calls into the scheduler.
 
 * 12. Preemption
 
-- scheduler implements asynchronous preemption;
+- scheduler implements asynchronous preemption (Go 1.14+);
 
 > background thread "sysmon" - monitor;
-> detects and unschedules long-running goroutines.
-(> 10ms)
+> detects long-running goroutines and sends signals (SIGURG on Unix);
+> unschedules goroutines running longer than 10ms.
 
-- go to global runqueue;
+- preempted goroutines go to global runqueue;
 - lower priority source;
+- signal-based approach is more sophisticated than polling.
 
 * 12. scheduler Goals
 

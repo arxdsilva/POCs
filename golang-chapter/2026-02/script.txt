@@ -867,16 +867,21 @@ In order to fix that,
 the scheduler implements
 asynchronous preemption.
 
-that preemption can be 
-a topic for another day,
-but essentially:
+Since Go 1.14,
+this preemption is signal-based,
+which is more sophisticated
+than simple polling.
 
-it runs a background thread
-called "sysmon" to detect
+Essentially:
+
+A background thread
+called "sysmon" monitors
 long-running goroutines.
 
-Then it will unschedule them
-when possible.
+When a goroutine has been running
+for longer than 10 milliseconds,
+sysmon sends a signal (SIGURG on Unix)
+to unschedule it.
 
 Once unscheduled,
 It would be unwise 
