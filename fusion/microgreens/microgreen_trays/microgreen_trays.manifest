@@ -1,0 +1,10 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "script",
+  "author": "GitHub Copilot",
+  "description": {
+    "": "Creates a parametric grow tray and water tray pair for microgreens on a Bambu Lab X1C."
+  },
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}

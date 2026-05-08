@@ -1,0 +1,10 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "script",
+  "author": "GitHub Copilot",
+  "description": {
+    "": "Creates a parametric humidity dome sized to sit on the generated microgreens water tray."
+  },
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}
